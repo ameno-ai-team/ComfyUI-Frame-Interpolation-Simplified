@@ -1,0 +1,1 @@
+# ComfyUI Frame Interpolation Simplified
