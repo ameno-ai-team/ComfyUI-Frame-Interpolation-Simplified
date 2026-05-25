@@ -33,7 +33,7 @@ def generic_frame_loop(
     multiplier: Union[SupportsInt, List],
     return_middle_frame_function,
     *return_middle_frame_function_args,
-    dtype = torch.float16
+    dtype = torch.bfloat16
 ):
     output_frames = torch.zeros(multiplier * frames.shape[0], *frames.shape[1:], dtype=dtype)
     out_len = 0
@@ -60,7 +60,7 @@ def generic_frame_loop(
     soft_empty_cache()
     return output_frames[:out_len]
 
-class Load_RIFE_VFI:
+class LoadInterpolationModel:
     @classmethod
     def INPUT_TYPES(s):
         return {}
@@ -76,7 +76,7 @@ class Load_RIFE_VFI:
         model.eval().to(DEVICE).half()
         return (model, )
 
-class RIFE_VFI:
+class Interpolate:
     @classmethod
     def INPUT_TYPES(s):
         return {
@@ -109,11 +109,11 @@ class RIFE_VFI:
         return (out,)
     
 NODE_CLASS_MAPPINGS = {
-    "RIFE VFI": RIFE_VFI,
-    "Load RIFE VFI": Load_RIFE_VFI,
+    "Interpolate": Interpolate,
+    "Load Interpolation Model": LoadInterpolationModel,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "RIFE VFI": "RIFE VFI (recommend rife47 and rife49)",
-    "Load RIFE VFI": "Load RIFE VFI"
+    "Interpolate": "Interpolate",
+    "LoadInterpolationModel": "LoadInterpolationModel"
 }
