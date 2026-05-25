@@ -2,10 +2,9 @@ import os
 import sys
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
     
-from comfy.model_management import soft_empty_cache, get_torch_device
+from comfy.model_management import get_torch_device
 from .rife_arch import IFNet
 from typing import *
-import einops
 import torch
 import os
 
@@ -16,49 +15,45 @@ def load_model_file():
         os.path.join(
             os.path.abspath(
                 os.path.join(
-                    os.path.dirname(__file__), './ckpts', 'rife'
+                    os.path.dirname(__file__), './ckpts'
                 )
             ), 'rife49.pth'
         )
     )
 
 def preprocess_frames(frames):
-    return einops.rearrange(frames[..., :3], "n h w c -> n c h w")
+    return frames[..., :3].permute(0, 3, 1, 2)
 
 def postprocess_frames(frames):
-    return einops.rearrange(frames, "n c h w -> n h w c")[..., :3].cpu()
+    return frames.permute(0, 2, 3, 1)[..., :3].cpu()
 
 def generic_frame_loop(
+    model,
     frames,
-    multiplier: Union[SupportsInt, List],
-    return_middle_frame_function,
-    *return_middle_frame_function_args,
-    dtype = torch.bfloat16
+    multiplier: float,
+    dtype=torch.float16
 ):
-    output_frames = torch.zeros(multiplier * frames.shape[0], *frames.shape[1:], dtype=dtype)
-    out_len = 0
+    n = len(frames)
+    out_count = round((n - 1) * multiplier) + 1
+    output_frames = torch.zeros(out_count, *frames.shape[1:], dtype=dtype)
     frames = frames.to(dtype=dtype, device=DEVICE)
 
-    for frame_itr in range(len(frames) - 1):
-        frame0 = frames[frame_itr:frame_itr+1]
-        frame1 = frames[frame_itr+1:frame_itr+2]
-        output_frames[out_len] = frame0
-        out_len += 1
+    inv_multiplier = 1.0 / multiplier
 
-        for middle_i in range(1, multiplier):
-            middle_frame = return_middle_frame_function(
-                frame0,
-                frame1,
-                middle_i / multiplier,
-                *return_middle_frame_function_args
+    for out_idx in range(out_count):
+        t = out_idx * inv_multiplier
+        src_idx = int(t)
+        frac = t - src_idx
+
+        if frac < 1e-6 or src_idx >= n - 1:
+            output_frames[out_idx] = frames[min(src_idx, n - 1)]
+        else:
+            frame0 = frames[src_idx:src_idx + 1]
+            frame1 = frames[src_idx + 1:src_idx + 2]
+            output_frames[out_idx] = model(
+                frame0, frame1, frac, [8, 4, 2, 1], True, True
             ).detach()
-            output_frames[out_len] = middle_frame
-            out_len += 1
-
-    output_frames[out_len] = frames[-1:]
-    out_len += 1
-    soft_empty_cache()
-    return output_frames[:out_len]
+    return output_frames
 
 class LoadInterpolationModel:
     @classmethod
@@ -83,7 +78,7 @@ class Interpolate:
             "required": {
                 "model": ("RIFE_VFI_MODEL", ),
                 "frames": ("IMAGE", ),
-                "multiplier": ("INT", {"default": 2, "min": 1}),
+                "multiplier": ("FLOAT", {"default": 2.0, "min": 1}),
             }
         }
     
@@ -95,17 +90,11 @@ class Interpolate:
         self,
         model,
         frames: torch.Tensor,
-        multiplier: SupportsInt = 2,
+        multiplier: float = 2.0,
     ):
         frames = preprocess_frames(frames)
-        
-        def return_middle_frame(frame_0, frame_1, timestep, model, scale_list, in_fast_mode, in_ensemble):
-            return model(frame_0, frame_1, timestep, scale_list, in_fast_mode, in_ensemble)
-        
-        args = [model, [8, 4, 2, 1], True, True]
-        out = postprocess_frames(
-            generic_frame_loop(frames, multiplier, return_middle_frame, *args)
-        )
+        output_frames = generic_frame_loop(model, frames, multiplier)
+        out = postprocess_frames(output_frames)
         return (out,)
     
 NODE_CLASS_MAPPINGS = {
