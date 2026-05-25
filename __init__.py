@@ -1,5 +1,6 @@
 import os
 import sys
+import math
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
     
 from comfy.model_management import get_torch_device
@@ -26,6 +27,19 @@ def preprocess_frames(frames):
 
 def postprocess_frames(frames):
     return frames.permute(0, 2, 3, 1)[..., :3].cpu()
+
+def best_multiplier(multiplier: float) -> float:
+    """
+    Snap multiplier to next integer if fractional part >= 0.75.
+    Above 0.75, ceilling and trimming is cheaper than running fractional.
+    Below 0.75, run as-is — ceiling wastes too many frames with no gain.
+    """
+    frac = multiplier % 1.0
+    if frac == 0:
+        return multiplier
+    if frac >= 0.75:
+        return float(math.ceil(multiplier))
+    return multiplier
 
 def generic_frame_loop(
     model,
@@ -92,14 +106,23 @@ class Interpolate:
         frames: torch.Tensor,
         multiplier: float = 2.0,
     ):
+        n = len(frames)
+        target_count = round((n - 1) * multiplier) + 1
+
+        run_multiplier = best_multiplier(multiplier)
+        snapped = run_multiplier != multiplier
+
         frames = preprocess_frames(frames)
-        output_frames = generic_frame_loop(model, frames, multiplier)
-        out = postprocess_frames(output_frames)
-        return (out,)
+        output_frames = generic_frame_loop(model, frames, run_multiplier)
+
+        if snapped:
+            output_frames = output_frames[:target_count]
+
+        return (postprocess_frames(output_frames),)
     
 NODE_CLASS_MAPPINGS = {
     "Interpolate": Interpolate,
-    "Load Interpolation Model": LoadInterpolationModel,
+    "LoadInterpolationModel": LoadInterpolationModel,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
